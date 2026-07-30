@@ -1,11 +1,13 @@
 name: Documentation Assistant
 
 on:
+  pull_request_target:
+    types: [opened, synchronize]
   issue_comment:
     types: [created]
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
@@ -13,43 +15,46 @@ jobs:
   docs-assistant:
     runs-on: ubuntu-latest
     if: |
-      github.event.issue.pull_request && 
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
-      contains(fromJSON('["stillalearner", "aufi", "Tamar-Dinavetsky"]'), github.event.comment.user.login) &&
-      (contains(github.event.comment.body, '[review-docs]') ||
-       contains(github.event.comment.body, '[update-docs]') ||
-       contains(github.event.comment.body, '[review-feature]'))
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request && 
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+        contains(fromJSON('["stillalearner", "aufi", "Tamar-Dinavetsky"]'), github.event.comment.user.login) &&
+        (contains(github.event.comment.body, '[review-docs]') ||
+         contains(github.event.comment.body, '[update-docs]') ||
+         contains(github.event.comment.body, '[review-feature]'))
+      ) ||
+      (github.event_name == 'pull_request_target')
+
     steps:
       - name: Get PR information
         id: pr_info
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          PR_NUMBER=${{ github.event.issue.number }}
-          echo "Extracting PR information for PR #$PR_NUMBER"
-          PR_DATA=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER)
-          
-          HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
-          HEAD_REPO=$(echo "$PR_DATA" | jq -r '.head.repo.full_name')
-          BASE_SHA=$(echo "$PR_DATA" | jq -r '.base.sha')
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            PR_NUMBER=${{ github.event.issue.number }}
+            PR_DATA=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER)
+            HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+            BASE_SHA=$(echo "$PR_DATA" | jq -r '.base.sha')
+          else
+            PR_NUMBER=${{ github.event.pull_request.number }}
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          fi
           
           echo "head_sha=$HEAD_SHA" >> $GITHUB_OUTPUT
-          echo "head_repo=$HEAD_REPO" >> $GITHUB_OUTPUT
           echo "base_sha=$BASE_SHA" >> $GITHUB_OUTPUT
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          
-          echo "PR info extracted: #$PR_NUMBER, base SHA: $BASE_SHA, head SHA: $HEAD_SHA"
 
       - name: Checkout PR Code
         uses: actions/checkout@v4
         with:
-          repository: ${{ steps.pr_info.outputs.head_repo || github.repository }}
-          ref: ${{ steps.pr_info.outputs.head_sha || github.ref }}
+          ref: ${{ steps.pr_info.outputs.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: false
-          
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
       - name: Documentation Assistant
         uses: redhat-community-ai-tools/code-to-docs@main
         with:
